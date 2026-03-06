@@ -196,18 +196,11 @@ Respond ONLY with valid JSON, no markdown, no backticks:
           };
           if (EMAILJS_SERVICE_ID !== "YOUR_SERVICE_ID" && typeof window.emailjs !== "undefined") {
             await window.emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-              driver_name:    payload.driverName,
-              job_ref:        payload.jobRef || "Not detected",
-              ref_source:     payload.jobRefSource || "—",
-              address:        payload.address || "Not detected",
-              driver_message: payload.driverMessage,
-              issue_summary:  payload.issuesSummary,
-              reason_code:    payload.reasonCode,
-              reason_label:   payload.reasonLabel,
-              confidence:     payload.confidence,
-              reasoning:      payload.reasoning,
-              photo_attached: payload.photoAttached,
+              driver_id:      payload.driverName,
               submitted_at:   new Date().toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" }),
+              driver_message: payload.driverMessage,
+              reason_code:    `${payload.reasonCode} – ${payload.reasonLabel}`,
+              photo:          payload.imageData || "",
             }, EMAILJS_PUBLIC_KEY);
           }
         } catch (e) { /* fire and forget */ }
@@ -259,10 +252,10 @@ Respond ONLY with valid JSON, no markdown, no backticks:
           <div style={{ width:"100%", maxWidth:480, padding:"20px 16px 0" }}>
             {status !== STATUS.SUBMITTED ? (
               <>
-                {/* Driver Name */}
+                {/* Driver ID */}
                 <div className="fade" style={{ marginBottom:16 }}>
-                  <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:8 }}>Driver Name</label>
-                  <input type="text" value={driverName} onChange={e=>setDriverName(e.target.value)} placeholder="Your name"
+                  <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:8 }}>Driver ID</label>
+                  <input type="text" value={driverName} onChange={e=>setDriverName(e.target.value)} placeholder="Your driver ID or name"
                     style={{ width:"100%", background:"#111317", border:"2px solid #23262D", borderRadius:12, padding:"11px 14px", color:"#EAEAEA", fontSize:14, fontFamily:"'DM Sans',sans-serif", outline:"none", transition:"border-color .2s" }}
                     onFocus={e=>e.target.style.borderColor="#F4A261"} onBlur={e=>e.target.style.borderColor="#23262D"} />
                 </div>
@@ -385,12 +378,10 @@ Respond ONLY with valid JSON, no markdown, no backticks:
                 <div style={{ background:"#111317", border:"1px solid #1C1F26", borderRadius:16, padding:18, marginBottom:24, textAlign:"left" }}>
                   <div style={{ color:"#F4A261", fontFamily:"'Space Mono',monospace", fontSize:10, letterSpacing:2, textTransform:"uppercase", marginBottom:12 }}>Submission Summary</div>
                   {[
-                    { label:"Driver",       value:driverName||"—" },
-                    { label:"Job Ref",      value:matched?.jobRef||"—" },
+                    { label:"Driver ID",    value:driverName||"—" },
+                    { label:"Submitted",    value:new Date().toLocaleString("en-GB",{dateStyle:"medium",timeStyle:"short"}) },
                     { label:"Message",      value:driverMessage },
-                    { label:"Issue",        value:matched?.summary||"—" },
-                    { label:"Reason Code",  value:selectedCode?`${selectedCode.code} · ${selectedCode.label}`:"—" },
-                    { label:"Time",         value:new Date().toLocaleString("en-GB",{dateStyle:"medium",timeStyle:"short"}) },
+                    { label:"Reason Code",  value:selectedCode?`${selectedCode.code} – ${selectedCode.label}`:"—" },
                   ].map(({label,value})=>(
                     <div key={label} style={{ padding:"8px 0", borderBottom:"1px solid #1A1D23", display:"flex", gap:12, alignItems:"flex-start" }}>
                       <div style={{ color:"#4B5563", fontSize:11, whiteSpace:"nowrap", minWidth:90 }}>{label}</div>
