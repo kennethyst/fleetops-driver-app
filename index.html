@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#F4A261" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FleetOps" />
+  <meta name="description" content="FleetOps – Driver delivery issue reporting" />
+
+  <title>FleetOps – Driver Reports</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Apple touch icon (iOS home screen) -->
+  <link rel="apple-touch-icon" href="icon-192.png" />
+
+  <!-- EmailJS -->
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+
+  <!-- React & Babel (no build step needed) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    html, body, #root { height: 100%; margin: 0; padding: 0; background: #0D0F12; }
+    /* Safe area padding for iPhone notch */
+    body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    const REASON_CODES = [
+      { code: "RC-01", label: "Wrong Item Delivered",          color: "#FF6B35", emoji: "📦" },
+      { code: "RC-02", label: "Damaged Goods",                 color: "#E63946", emoji: "💥" },
+      { code: "RC-03", label: "Partial Delivery",              color: "#F4A261", emoji: "📋" },
+      { code: "RC-04", label: "Customer Not Home / No Access", color: "#457B9D", emoji: "🚪" },
+      { code: "RC-05", label: "Address Not Found",             color: "#6A4C93", emoji: "🗺️" },
+      { code: "RC-06", label: "Customer Refused Delivery",     color: "#2A9D8F", emoji: "🙅" },
+      { code: "RC-07", label: "Signature Required – Unavailable", color: "#264653", emoji: "✍️" },
+      { code: "RC-08", label: "Vehicle Breakdown / Delay",     color: "#8338EC", emoji: "🚛" },
+      { code: "RC-09", label: "Weather / Road Conditions",     color: "#3A86FF", emoji: "🌧️" },
+      { code: "RC-10", label: "Other",                         color: "#6C757D", emoji: "📝" },
+    ];
+
+    const STATUS = { IDLE: "idle", MATCHING: "matching", REVIEWED: "reviewed", SUBMITTING: "submitting", SUBMITTED: "submitted" };
+
+    // ── EmailJS config — fill these in ───────────────────────────────────────
+    const EMAILJS_SERVICE_ID  = "YOUR_SERVICE_ID";
+    const EMAILJS_TEMPLATE_ID = "YOUR_TEMPLATE_ID";
+    const EMAILJS_PUBLIC_KEY  = "YOUR_PUBLIC_KEY";
+    // ────────────────────────────────────────────────────────────────────────
+
+    function DriverReportApp() {
+      const [status, setStatus]           = useState(STATUS.IDLE);
+      const [imageData, setImageData]     = useState(null);
+      const [imageFile, setImageFile]     = useState(null);
+      const [driverName, setDriverName]   = useState("");
+      const [driverMessage, setDriverMessage] = useState("");
+      const [matched, setMatched]         = useState(null);
+      const [selectedCode, setSelectedCode] = useState(null);
+      const [showAllCodes, setShowAllCodes] = useState(false);
+      const [error, setError]             = useState(null);
+      const fileRef = useRef();
+
+      const handleImageChange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setImageFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => setImageData(ev.target.result);
+        reader.readAsDataURL(file);
+      };
+
+      const handleAnalyse = async () => {
+        if (!driverMessage.trim()) return;
+        setStatus(STATUS.MATCHING);
+        setError(null);
+        setMatched(null);
+        setSelectedCode(null);
+
+        try {
+          const textPromise = fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 500,
+              messages: [{
+                role: "user",
+                content: `You are an operations assistant for a logistics company. A driver submitted this message about a delivery issue:\n\n"${driverMessage}"\n\nIdentify the SINGLE BEST matching reason code:\nRC-01: Wrong Item Delivered\nRC-02: Damaged Goods\nRC-03: Partial Delivery\nRC-04: Customer Not Home / No Access\nRC-05: Address Not Found\nRC-06: Customer Refused Delivery\nRC-07: Signature Required – Unavailable\nRC-08: Vehicle Breakdown / Delay\nRC-09: Weather / Road Conditions\nRC-10: Other\n\nAlso extract:\n- jobRef: any job/order/reference number mentioned in the text (or null)\n- summary: one-line professional ops summary\n- confidence: high|medium|low\n- reasoning: one sentence explaining the code choice\n\nRespond ONLY with valid JSON, no markdown, no backticks:\n{"matchedCode":"RC-XX","jobRef":"value or null","summary":"...","confidence":"high|medium|low","reasoning":"..."}`,
+              }],
+            }),
+          }).then(r => r.json());
+
+          const photoPromise = imageFile
+            ? new Promise(async (resolve) => {
+                try {
+                  const base64 = await new Promise((res, rej) => {
+                    const r = new FileReader();
+                    r.onload = () => res(r.result.split(",")[1]);
+                    r.onerror = () => rej();
+                    r.readAsDataURL(imageFile);
+                  });
+                  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      model: "claude-sonnet-4-20250514",
+                      max_tokens: 200,
+                      messages: [{
+                        role: "user",
+                        content: [
+                          { type: "image", source: { type: "base64", media_type: imageFile.type || "image/jpeg", data: base64 } },
+                          { type: "text", text: `Scan this delivery note. Extract ONLY the job reference number, order number, consignment number, waybill, or primary delivery ID. Also extract the delivery address if visible.\n\nRespond ONLY with valid JSON, no markdown:\n{"jobRef":"extracted reference or null","address":"delivery address or null","source":"photo"}` },
+                        ],
+                      }],
+                    }),
+                  });
+                  const d = await resp.json();
+                  const t = d.content?.map(i => i.text || "").join("") || "";
+                  resolve(JSON.parse(t.replace(/```json|```/g, "").trim()));
+                } catch {
+                  resolve({ jobRef: null, address: null, source: "photo" });
+                }
+              })
+            : Promise.resolve(null);
+
+          const [textResult, photoResult] = await Promise.all([textPromise, photoPromise]);
+          const textParsed = JSON.parse(
+            (textResult.content?.map(i => i.text || "").join("") || "").replace(/```json|```/g, "").trim()
+          );
+
+          const finalJobRef   = photoResult?.jobRef || textParsed.jobRef || null;
+          const jobRefSource  = photoResult?.jobRef ? "photo" : textParsed.jobRef ? "message" : null;
+          const merged = { ...textParsed, jobRef: finalJobRef, jobRefSource, address: photoResult?.address || null };
+
+          setMatched(merged);
+          const match = REASON_CODES.find(r => r.code === merged.matchedCode);
+          if (match) setSelectedCode(match);
+          setStatus(STATUS.REVIEWED);
+        } catch (err) {
+          setError("Could not process your submission. Please try again or pick a code manually below.");
+          setStatus(STATUS.REVIEWED);
+          setMatched({ matchedCode: null, jobRef: null, summary: null });
+        }
+      };
+
+      const handleSubmit = async () => {
+        setStatus(STATUS.SUBMITTING);
+        try {
+          const payload = {
+            timestamp:      new Date().toISOString(),
+            driverName:     driverName || "Unknown",
+            jobRef:         matched?.jobRef || "",
+            jobRefSource:   matched?.jobRefSource || "",
+            address:        matched?.address || "",
+            driverMessage,
+            issuesSummary:  matched?.summary || "",
+            reasonCode:     selectedCode?.code || "",
+            reasonLabel:    selectedCode?.label || "",
+            confidence:     matched?.confidence || "",
+            reasoning:      matched?.reasoning || "",
+            photoAttached:  imageData ? "Yes" : "No",
+          };
+          if (EMAILJS_SERVICE_ID !== "YOUR_SERVICE_ID" && typeof window.emailjs !== "undefined") {
+            await window.emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+              driver_name:    payload.driverName,
+              job_ref:        payload.jobRef || "Not detected",
+              ref_source:     payload.jobRefSource || "—",
+              address:        payload.address || "Not detected",
+              driver_message: payload.driverMessage,
+              issue_summary:  payload.issuesSummary,
+              reason_code:    payload.reasonCode,
+              reason_label:   payload.reasonLabel,
+              confidence:     payload.confidence,
+              reasoning:      payload.reasoning,
+              photo_attached: payload.photoAttached,
+              submitted_at:   new Date().toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" }),
+            }, EMAILJS_PUBLIC_KEY);
+          }
+        } catch (e) { /* fire and forget */ }
+        setStatus(STATUS.SUBMITTED);
+      };
+
+      const reset = () => {
+        setStatus(STATUS.IDLE);
+        setImageData(null); setImageFile(null);
+        setDriverName(""); setDriverMessage("");
+        setMatched(null); setSelectedCode(null);
+        setShowAllCodes(false); setError(null);
+        if (fileRef.current) fileRef.current.value = "";
+      };
+
+      const canAnalyse = driverMessage.trim().length > 3 && status === STATUS.IDLE;
+      const confidenceColor = { high: "#2A9D8F", medium: "#F4A261", low: "#E63946" };
+
+      return (
+        <div style={{ minHeight:"100vh", background:"#0D0F12", fontFamily:"'DM Sans','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", paddingBottom:48 }}>
+          <style>{`
+            @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Space+Mono:wght@400;700&display=swap');
+            *{box-sizing:border-box;margin:0;padding:0}
+            .tap{cursor:pointer;transition:all .18s}.tap:hover{opacity:.82}
+            .rc-row{cursor:pointer;transition:all .15s;border:2px solid #23262D;border-radius:12px}
+            .rc-row:hover{border-color:#3A3D44!important;background:#1A1D23!important}
+            .rc-row.sel{border-color:var(--rc-color)!important;background:color-mix(in srgb,var(--rc-color) 10%,#0D0F12)!important}
+            .send-btn{transition:all .2s;cursor:pointer}.send-btn:not(:disabled):hover{transform:scale(1.08)}.send-btn:disabled{opacity:.3;cursor:not-allowed}
+            .fade{animation:fd .35s ease}@keyframes fd{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+            .spin{animation:sp .75s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+            textarea{resize:none;outline:none;transition:border-color .2s}textarea:focus{border-color:#F4A261!important}
+            .submit-cta{transition:all .2s;cursor:pointer}.submit-cta:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(244,162,97,.38)!important}.submit-cta:disabled{opacity:.3;cursor:not-allowed}
+          `}</style>
+
+          {/* Header */}
+          <div style={{ width:"100%", maxWidth:480, background:"#111317", borderBottom:"1px solid #1C1F26", padding:"18px 20px 14px", position:"sticky", top:0, zIndex:10 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <div style={{ width:38, height:38, borderRadius:11, background:"linear-gradient(135deg,#F4A261,#E76F51)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>🚚</div>
+              <div>
+                <div style={{ color:"#F4A261", fontFamily:"'Space Mono',monospace", fontSize:10, letterSpacing:2, textTransform:"uppercase" }}>FleetOps</div>
+                <div style={{ color:"#EAEAEA", fontWeight:600, fontSize:15 }}>Report Delivery Issue</div>
+              </div>
+              <div style={{ marginLeft:"auto", background:"#1A1D23", borderRadius:8, padding:"4px 10px", color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace" }}>
+                {new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ width:"100%", maxWidth:480, padding:"20px 16px 0" }}>
+            {status !== STATUS.SUBMITTED ? (
+              <>
+                {/* Driver Name */}
+                <div className="fade" style={{ marginBottom:16 }}>
+                  <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:8 }}>Driver Name</label>
+                  <input type="text" value={driverName} onChange={e=>setDriverName(e.target.value)} placeholder="Your name"
+                    style={{ width:"100%", background:"#111317", border:"2px solid #23262D", borderRadius:12, padding:"11px 14px", color:"#EAEAEA", fontSize:14, fontFamily:"'DM Sans',sans-serif", outline:"none", transition:"border-color .2s" }}
+                    onFocus={e=>e.target.style.borderColor="#F4A261"} onBlur={e=>e.target.style.borderColor="#23262D"} />
+                </div>
+
+                {/* Photo Upload */}
+                <div className="fade" style={{ marginBottom:16 }}>
+                  <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:8 }}>Delivery Note Photo</label>
+                  <div className="tap" onClick={()=>fileRef.current?.click()} style={{ border:`2px dashed ${imageData?"#2A9D8F66":"#23262D"}`, borderRadius:14, overflow:"hidden", background:imageData?"none":"#111317", minHeight:imageData?0:88, display:"flex", alignItems:"center", justifyContent:"center", position:"relative" }}>
+                    {imageData ? (
+                      <>
+                        <img src={imageData} alt="Note" style={{ width:"100%", maxHeight:200, objectFit:"cover", display:"block" }} />
+                        <div style={{ position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,.72)", borderRadius:7, padding:"3px 9px", color:"#2A9D8F", fontSize:10, fontFamily:"'Space Mono',monospace" }}>✓ attached · tap to change</div>
+                      </>
+                    ) : (
+                      <div style={{ textAlign:"center", padding:"16px 0" }}>
+                        <div style={{ fontSize:26, marginBottom:4 }}>📎</div>
+                        <div style={{ color:"#4B5563", fontSize:13 }}>Attach delivery note photo</div>
+                      </div>
+                    )}
+                    <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleImageChange} style={{ display:"none" }} />
+                  </div>
+                </div>
+
+                {/* Message */}
+                <div className="fade" style={{ marginBottom:16 }}>
+                  <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase", display:"block", marginBottom:8 }}>Your Message</label>
+                  <div style={{ background:"#111317", border:"2px solid #23262D", borderRadius:14, padding:"12px 12px 12px 14px", display:"flex", gap:10, alignItems:"flex-end" }}>
+                    <textarea value={driverMessage} onChange={e=>{ setDriverMessage(e.target.value); if(status===STATUS.REVIEWED){setStatus(STATUS.IDLE);setMatched(null);setSelectedCode(null);} }}
+                      placeholder='e.g. "Job 4821 – box was crushed on arrival, customer noted damage"' rows={3}
+                      style={{ flex:1, background:"transparent", border:"none", color:"#EAEAEA", fontSize:14, fontFamily:"'DM Sans',sans-serif", lineHeight:1.55 }} />
+                    <button className="send-btn" disabled={!canAnalyse} onClick={handleAnalyse}
+                      style={{ width:40, height:40, borderRadius:"50%", flexShrink:0, background:canAnalyse?"linear-gradient(135deg,#F4A261,#E76F51)":"#1A1D23", border:"none", display:"flex", alignItems:"center", justifyContent:"center", fontSize:17 }}>
+                      {status===STATUS.MATCHING
+                        ? <div className="spin" style={{ width:18, height:18, border:"2.5px solid #ffffff33", borderTopColor:"#fff", borderRadius:"50%" }} />
+                        : "✨"}
+                    </button>
+                  </div>
+                  <div style={{ color:"#2E3138", fontSize:11, marginTop:5, paddingLeft:2 }}>
+                    {imageFile ? "📷 Photo scanned for job ref · 💬 Message matched to reason code" : "AI will match your message to a reason code"}
+                  </div>
+                </div>
+
+                {/* AI Result */}
+                {status===STATUS.REVIEWED && matched && !error && (
+                  <div className="fade" style={{ background:"#111317", border:"1px solid #1C1F26", borderRadius:16, padding:14, marginBottom:16 }}>
+                    <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
+                      <div style={{ background:"#1A3D2B", color:"#C8EDD8", borderRadius:"16px 16px 4px 16px", padding:"9px 13px", maxWidth:"85%", fontSize:13, lineHeight:1.5 }}>{driverMessage}</div>
+                    </div>
+                    <div style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+                      <div style={{ width:26, height:26, borderRadius:"50%", flexShrink:0, background:"linear-gradient(135deg,#F4A261,#E76F51)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13 }}>🤖</div>
+                      <div style={{ background:"#1A1D23", borderRadius:"4px 16px 16px 16px", padding:"10px 13px", flex:1 }}>
+                        {matched.jobRef && (
+                          <div style={{ marginBottom:7, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                            <span style={{ color:"#6B7280", fontSize:11 }}>Job ref:</span>
+                            <span style={{ color:"#F4A261", fontFamily:"'Space Mono',monospace", fontSize:11, background:"#F4A26115", borderRadius:4, padding:"1px 6px" }}>{matched.jobRef}</span>
+                            {matched.jobRefSource && (
+                              <span style={{ background:matched.jobRefSource==="photo"?"#3A86FF15":"#2A9D8F15", color:matched.jobRefSource==="photo"?"#3A86FF":"#2A9D8F", fontSize:9, fontFamily:"'Space Mono',monospace", borderRadius:4, padding:"2px 5px", textTransform:"uppercase" }}>
+                                {matched.jobRefSource==="photo"?"📷 photo":"💬 message"}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {matched.address && <div style={{ marginBottom:7 }}><span style={{ color:"#6B7280", fontSize:11 }}>Address: </span><span style={{ color:"#C4C9D4", fontSize:12 }}>{matched.address}</span></div>}
+                        <div style={{ color:"#EAEAEA", fontSize:13, marginBottom:8, lineHeight:1.5 }}>{matched.summary}</div>
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+                          <span style={{ color:"#4B5563", fontSize:11 }}>Matched:</span>
+                          {selectedCode && <span style={{ background:selectedCode.color+"22", color:selectedCode.color, fontFamily:"'Space Mono',monospace", fontSize:10, fontWeight:700, borderRadius:5, padding:"2px 7px" }}>{selectedCode.code}</span>}
+                          {matched.confidence && <span style={{ background:confidenceColor[matched.confidence]+"18", color:confidenceColor[matched.confidence], fontSize:10, fontFamily:"'Space Mono',monospace", borderRadius:5, padding:"2px 7px", textTransform:"uppercase" }}>{matched.confidence}</span>}
+                        </div>
+                        {matched.reasoning && <div style={{ color:"#3D4350", fontSize:11, marginTop:6, fontStyle:"italic" }}>{matched.reasoning}</div>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {error && status===STATUS.REVIEWED && (
+                  <div className="fade" style={{ background:"rgba(230,57,70,.08)", border:"1px solid rgba(230,57,70,.2)", borderRadius:10, padding:"10px 14px", marginBottom:14, color:"#E63946", fontSize:13 }}>{error}</div>
+                )}
+
+                {/* Reason Code */}
+                {status===STATUS.REVIEWED && (
+                  <div className="fade" style={{ marginBottom:20 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                      <label style={{ color:"#6B7280", fontSize:11, fontFamily:"'Space Mono',monospace", letterSpacing:1.5, textTransform:"uppercase" }}>Confirm Reason Code</label>
+                      <span className="tap" onClick={()=>setShowAllCodes(!showAllCodes)} style={{ color:"#F4A261", fontSize:12 }}>{showAllCodes?"Show less ▲":"All codes ▼"}</span>
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                      {REASON_CODES.filter(rc=>showAllCodes||rc.code===matched?.matchedCode||selectedCode?.code===rc.code).map(rc=>{
+                        const isSel=selectedCode?.code===rc.code;
+                        return (
+                          <div key={rc.code} className={`rc-row${isSel?" sel":""}`} style={{ "--rc-color":rc.color, padding:"11px 13px", display:"flex", alignItems:"center", gap:10 }} onClick={()=>setSelectedCode(rc)}>
+                            <span style={{ fontSize:18 }}>{rc.emoji}</span>
+                            <div style={{ flex:1 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <span style={{ background:rc.color+"22", color:rc.color, fontFamily:"'Space Mono',monospace", fontSize:10, fontWeight:700, borderRadius:5, padding:"2px 7px" }}>{rc.code}</span>
+                                {rc.code===matched?.matchedCode && <span style={{ background:"#F4A26115", color:"#F4A261", fontSize:9, fontFamily:"'Space Mono',monospace", borderRadius:4, padding:"2px 5px", textTransform:"uppercase" }}>AI Match</span>}
+                              </div>
+                              <div style={{ color:isSel?"#EAEAEA":"#9CA3AF", fontSize:13, marginTop:3 }}>{rc.label}</div>
+                            </div>
+                            {isSel && <div style={{ color:rc.color, fontSize:18 }}>✓</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {status===STATUS.REVIEWED && (
+                  <button className="submit-cta fade" disabled={!selectedCode||status===STATUS.SUBMITTING} onClick={handleSubmit}
+                    style={{ width:"100%", padding:15, background:selectedCode?"linear-gradient(135deg,#F4A261,#E76F51)":"#1A1D23", border:"none", borderRadius:13, color:selectedCode?"#fff":"#4B5563", fontWeight:600, fontSize:15, fontFamily:"'DM Sans',sans-serif", boxShadow:selectedCode?"0 4px 18px rgba(244,162,97,.22)":"none", marginBottom:8 }}>
+                    {status===STATUS.SUBMITTING?"Sending report…":selectedCode?`Submit · ${selectedCode.code} – ${selectedCode.label}`:"Select a reason code to submit"}
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="fade" style={{ textAlign:"center", paddingTop:32 }}>
+                <div style={{ width:72, height:72, borderRadius:"50%", margin:"0 auto 18px", background:"#2A9D8F18", border:"2px solid #2A9D8F44", display:"flex", alignItems:"center", justifyContent:"center", fontSize:36 }}>✅</div>
+                <div style={{ color:"#EAEAEA", fontSize:20, fontWeight:600, marginBottom:6 }}>Report Submitted</div>
+                <div style={{ color:"#6B7280", fontSize:14, marginBottom:28, lineHeight:1.6 }}>Ops team notified. Issue has been logged.</div>
+                <div style={{ background:"#111317", border:"1px solid #1C1F26", borderRadius:16, padding:18, marginBottom:24, textAlign:"left" }}>
+                  <div style={{ color:"#F4A261", fontFamily:"'Space Mono',monospace", fontSize:10, letterSpacing:2, textTransform:"uppercase", marginBottom:12 }}>Submission Summary</div>
+                  {[
+                    { label:"Driver",       value:driverName||"—" },
+                    { label:"Job Ref",      value:matched?.jobRef||"—" },
+                    { label:"Message",      value:driverMessage },
+                    { label:"Issue",        value:matched?.summary||"—" },
+                    { label:"Reason Code",  value:selectedCode?`${selectedCode.code} · ${selectedCode.label}`:"—" },
+                    { label:"Time",         value:new Date().toLocaleString("en-GB",{dateStyle:"medium",timeStyle:"short"}) },
+                  ].map(({label,value})=>(
+                    <div key={label} style={{ padding:"8px 0", borderBottom:"1px solid #1A1D23", display:"flex", gap:12, alignItems:"flex-start" }}>
+                      <div style={{ color:"#4B5563", fontSize:11, whiteSpace:"nowrap", minWidth:90 }}>{label}</div>
+                      <div style={{ color:"#EAEAEA", fontSize:12, lineHeight:1.5 }}>{value}</div>
+                    </div>
+                  ))}
+                  {imageData && (
+                    <div style={{ paddingTop:10 }}>
+                      <div style={{ color:"#4B5563", fontSize:11, marginBottom:6 }}>Delivery Note</div>
+                      <img src={imageData} alt="Note" style={{ width:"100%", borderRadius:8, maxHeight:120, objectFit:"cover" }} />
+                    </div>
+                  )}
+                </div>
+                <button className="submit-cta" onClick={reset} style={{ width:"100%", padding:14, background:"linear-gradient(135deg,#F4A261,#E76F51)", border:"none", borderRadius:13, color:"#fff", fontWeight:600, fontSize:15, fontFamily:"'DM Sans',sans-serif", boxShadow:"0 4px 18px rgba(244,162,97,.22)" }}>+ New Report</button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Register service worker
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+
+    // Mount app
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<DriverReportApp />);
+  </script>
+</body>
+</html>
