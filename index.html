@@ -114,12 +114,36 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       model: "claude-sonnet-4-20250514",
-                      max_tokens: 200,
+                      max_tokens: 400,
                       messages: [{
                         role: "user",
                         content: [
                           { type: "image", source: { type: "base64", media_type: imageFile.type || "image/jpeg", data: base64 } },
-                          { type: "text", text: `Scan this delivery note. Extract ONLY the job reference number, order number, consignment number, waybill, or primary delivery ID. Also extract the delivery address if visible.\n\nRespond ONLY with valid JSON, no markdown:\n{"jobRef":"extracted reference or null","address":"delivery address or null","source":"photo"}` },
+                          { type: "text", text: `You are scanning a delivery note or consignment document that contains a barcode or QR code label.
+
+YOUR ONLY GOAL: Find the human-readable number printed directly underneath or beside the barcode/QR code on the label.
+
+HOW BARCODES APPEAR ON DELIVERY NOTES:
+- A series of black vertical lines (barcode) OR a square grid pattern (QR code)
+- Directly below or beside it: a number or alphanumeric code printed in plain text
+- This is usually the longest or most prominent number on the label
+- It may look like: 1234567890, SG-2024-00123, JOB/4821, CN123456789SG, etc.
+
+STEP BY STEP:
+1. Locate the barcode or QR code on the document
+2. Read the number/text printed immediately below or beside it
+3. That is the jobRef
+
+ALSO extract the delivery recipient address if visible (street, unit, city).
+
+IMPORTANT:
+- Do NOT return the date, phone number, postcode alone, or page number
+- If there are multiple barcodes, pick the one most prominently placed or largest
+- If the number under the barcode is partially obscured, return your best read
+- Only return null if there is truly no barcode or number visible at all
+
+Respond ONLY with valid JSON, no markdown, no backticks:
+{"jobRef":"number printed under the barcode or null","address":"delivery address or null","source":"photo"}` },
                         ],
                       }],
                     }),
